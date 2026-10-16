@@ -1,0 +1,43 @@
+{
+  "name": "@sandsoftwaresolutions/concurrency",
+  "version": "0.1.0",
+  "description": "Run async work with a maximum at once: limit, mapLimit, chunk and a mutex. Stoppable, ordered results.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "import": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "keywords": [
+    "concurrency",
+    "promise",
+    "pool",
+    "queue"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SandSoftwareSolutions/ss-concurrency.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SandSoftwareSolutions/ss-concurrency/issues"
+  },
+  "homepage": "https://github.com/SandSoftwareSolutions/ss-concurrency#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}
