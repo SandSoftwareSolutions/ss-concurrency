@@ -6,11 +6,21 @@
 export function limit(concurrency) {
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new RangeError("limit: concurrency must be a whole number of at least 1");
   let active = 0;
-  const queue = [];
+  // A queue with a head index: Array.shift() is O(n) and made 100 000 queued jobs take seconds.
+  let queue = [];
+  let head = 0;
   const next = () => {
-    if (active >= concurrency || queue.length === 0) return;
+    if (active >= concurrency || head >= queue.length) return;
     active++;
-    const job = queue.shift();
+    const job = queue[head];
+    queue[head++] = undefined;
+    if (head === queue.length) {
+      queue = [];
+      head = 0;
+    } else if (head > 1024 && head * 2 > queue.length) {
+      queue = queue.slice(head);
+      head = 0;
+    }
     Promise.resolve()
       .then(job.fn)
       .then(job.resolve, job.reject)
@@ -28,10 +38,12 @@ export function limit(concurrency) {
   };
   Object.defineProperties(run, {
     activeCount: { get: () => active },
-    pendingCount: { get: () => queue.length }
+    pendingCount: { get: () => queue.length - head }
   });
   run.clear = () => {
-    const dropped = queue.splice(0);
+    const dropped = queue.slice(head);
+    queue = [];
+    head = 0;
     for (const job of dropped) job.reject(new Error("limit: cleared before it started"));
   };
   return run;
@@ -39,39 +51,44 @@ export function limit(concurrency) {
 
 /**
  * Like `Promise.all(items.map(fn))` but with at most `concurrency` at a time, results in the order of the items.
- * On the first failure no new work is started and the error is thrown (work already running finishes on its own).
+ * On the first failure no new work is started and the error is thrown at once (work already running finishes on its own).
  * With `{ settle: true }` nothing is thrown: you get `{ status, value | reason }` per item, like `Promise.allSettled`.
- * `signal` stops starting new work and rejects with the signal's reason.
+ * `signal` stops starting new work and rejects at once with the signal's reason.
  */
 export async function mapLimit(items, concurrency, fn, { settle = false, signal } = {}) {
   if (!Number.isInteger(concurrency) || concurrency < 1) throw new RangeError("mapLimit: concurrency must be a whole number of at least 1");
   const list = [...items];
   const results = new Array(list.length);
   let index = 0;
-  let failure;
   let failed = false;
+  let fail;
+  // Rejects as soon as the first failure or the abort happens, like Promise.all, without waiting for work that is still running.
+  const failure = new Promise((_resolve, reject) => {
+    fail = (reason) => {
+      failed = true;
+      reject(reason);
+    };
+  });
+  const onAbort = () => fail(signal.reason);
   async function worker() {
     while (!failed && index < list.length) {
-      if (signal?.aborted) {
-        failed = true;
-        failure = signal.reason;
-        return;
-      }
       const i = index++;
       try {
         const value = await fn(list[i], i);
         results[i] = settle ? { status: "fulfilled", value } : value;
       } catch (reason) {
         if (settle) results[i] = { status: "rejected", reason };
-        else if (!failed) {
-          failed = true;
-          failure = reason;
-        }
+        else fail(reason);
       }
     }
   }
-  await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
-  if (failed) throw failure;
+  try {
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    await Promise.race([Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker)), failure]);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
+  }
   return results;
 }
 

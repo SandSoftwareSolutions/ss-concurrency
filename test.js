@@ -82,3 +82,71 @@ test("mutex runs one at a time in order", async () => {
   assert.deepEqual(log, ["start1", "end1", "start2", "end2", "start3", "end3"]);
   assert.equal(m.locked, false);
 });
+
+// ---- review additions ----
+
+test("a long queue does not get slower with every job", async () => {
+  const run = limit(2);
+  const started = Date.now();
+  const all = [];
+  for (let i = 0; i < 200_000; i++) all.push(run(() => i));
+  assert.equal(run.pendingCount, 200_000 - 2);
+  const results = await Promise.all(all);
+  assert.equal(results[199_999], 199_999);
+  assert.equal(run.pendingCount, 0);
+  assert.ok(Date.now() - started < 4000, `took ${Date.now() - started} ms`);
+});
+
+test("pendingCount and clear stay right after jobs have started", async () => {
+  const run = limit(1);
+  const gates = [];
+  const jobs = Array.from({ length: 5 }, (_, i) => run(() => new Promise((r) => gates.push(() => r(i)))));
+  assert.deepEqual([run.activeCount, run.pendingCount], [1, 4]);
+  await sleep(5);
+  gates[0]();
+  await jobs[0];
+  await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual([run.activeCount, run.pendingCount], [1, 3]);
+  const outcomes = jobs.slice(2).map((j) => j.then(() => "ran", (e) => e.message));
+  run.clear();
+  assert.equal(run.pendingCount, 0);
+  assert.deepEqual(await Promise.all(outcomes), ["limit: cleared before it started", "limit: cleared before it started", "limit: cleared before it started"]);
+  await sleep(5);
+  gates[1]();
+  assert.equal(await jobs[1], 1);
+});
+
+test("mapLimit rejects at once on the first failure, even if other work hangs", async () => {
+  const started = Date.now();
+  const boom = new Error("boom");
+  await assert.rejects(
+    mapLimit([1, 2, 3], 3, (n) => (n === 1 ? Promise.reject(boom) : new Promise(() => {}))),
+    (e) => e === boom
+  );
+  assert.ok(Date.now() - started < 1000);
+});
+
+test("mapLimit rejects at once when the signal aborts, even if work hangs", async () => {
+  const controller = new AbortController();
+  const reason = new Error("stop");
+  const started = Date.now();
+  const promise = mapLimit([1, 2, 3, 4], 2, () => new Promise(() => {}), { signal: controller.signal });
+  setTimeout(() => controller.abort(reason), 30);
+  await assert.rejects(promise, (e) => e === reason);
+  assert.ok(Date.now() - started < 1000);
+  await assert.rejects(mapLimit([1], 1, () => 1, { signal: AbortSignal.abort(reason) }), (e) => e === reason);
+});
+
+test("mapLimit does not start new work after a failure or an abort", async () => {
+  const seen = [];
+  await assert.rejects(mapLimit([1, 2, 3, 4, 5, 6], 2, async (n) => { seen.push(n); await new Promise((r) => setTimeout(r, 5)); if (n === 2) throw new Error("x"); }));
+  await new Promise((r) => setTimeout(r, 40));
+  assert.ok(!seen.includes(6), `started ${seen}`);
+});
+
+test("a failure after the answer was given is not an unhandled rejection", async () => {
+  const late = [];
+  await assert.rejects(mapLimit([1, 2], 2, async (n) => { if (n === 1) throw new Error("first"); await new Promise((r) => setTimeout(r, 10)); late.push(n); throw new Error("second"); }), /first/);
+  await new Promise((r) => setTimeout(r, 40)); // the test runner fails the file on an unhandled rejection
+  assert.deepEqual(late, [2]);
+});
