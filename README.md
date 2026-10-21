@@ -10,6 +10,8 @@ Do many things at once, but not too many. Run async work with a maximum, in orde
 npm install @sandsoftwaresolutions/concurrency
 ```
 
+Works with `import` and `require()`, and ships TypeScript types for both.
+
 ## Usage
 
 ```js
